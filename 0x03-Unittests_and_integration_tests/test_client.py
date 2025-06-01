@@ -100,12 +100,26 @@ class TestIntegrationGithubOrgClient(unittest.TestCase):
     def test_public_repos(self) -> None:
         """Test public_repos returns expected repos without license filter."""
         client = GithubOrgClient("google")
-        self.assertEqual(client.public_repos(), self.expected_repos)
+        repos = client.public_repos()
+        
+        # Test that the method returns the expected repos from fixtures
+        self.assertEqual(repos, self.expected_repos)
+        
+        # Ensure the mocked requests.get was called correctly
+        self.mock_get.assert_any_call("https://api.github.com/orgs/google")
+        self.mock_get.assert_any_call(self.org_payload["repos_url"])
 
     def test_public_repos_with_license(self) -> None:
         """Test public_repos returns expected repos with apache-2.0 license."""
         client = GithubOrgClient("google")
-        self.assertEqual(client.public_repos("apache-2.0"), self.apache2_repos)
+        repos = client.public_repos("apache-2.0")
+        
+        # Test that the method returns only apache-2.0 licensed repos
+        self.assertEqual(repos, self.apache2_repos)
+        
+        # Ensure the mocked requests.get was called correctly
+        self.mock_get.assert_any_call("https://api.github.com/orgs/google")
+        self.mock_get.assert_any_call(self.org_payload["repos_url"])
 
 
 if __name__ == '__main__':
