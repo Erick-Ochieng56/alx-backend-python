@@ -1,9 +1,10 @@
 # messaging_app/chats/views.py
 
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Q
 from .models import User, Conversation, Message
 from .serializers import (
@@ -20,6 +21,9 @@ class UserViewSet(viewsets.ModelViewSet):
     serializer_class = UserSerializer
     permission_classes = [IsAuthenticated]
     lookup_field = 'user_id'
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
+    search_fields = ['username', 'first_name', 'last_name', 'email']
+    filterset_fields = ['is_active', 'date_joined']
     
     def get_queryset(self):
         """
@@ -43,6 +47,11 @@ class ConversationViewSet(viewsets.ModelViewSet):
     """
     permission_classes = [IsAuthenticated]
     lookup_field = 'conversation_id'
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['title']
+    filterset_fields = ['is_group', 'created_at']
+    ordering_fields = ['created_at', 'updated_at']
+    ordering = ['-updated_at']
     
     def get_queryset(self):
         """
@@ -148,6 +157,11 @@ class MessageViewSet(viewsets.ModelViewSet):
     serializer_class = MessageSerializer
     permission_classes = [IsAuthenticated]
     lookup_field = 'message_id'
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['content']
+    filterset_fields = ['conversation', 'sender', 'timestamp', 'message_type']
+    ordering_fields = ['timestamp']
+    ordering = ['timestamp']
     
     def get_queryset(self):
         """
