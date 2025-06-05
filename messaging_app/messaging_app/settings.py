@@ -143,3 +143,6 @@ REST_FRAMEWORK = {
         'rest_framework.filters.OrderingFilter',
     ],
 }
+
+# Custom user model
+AUTH_USER_MODEL = 'chats.User'
