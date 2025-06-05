@@ -175,7 +175,12 @@ class MessageViewSet(viewsets.ModelViewSet):
             conversation__in=user_conversations
         ).select_related('sender', 'conversation')
         
-        # Filter by conversation if specified
+        # Handle nested routing - filter by conversation if it's in the URL path
+        if 'conversation_pk' in self.kwargs:
+            conversation_id = self.kwargs['conversation_pk']
+            queryset = queryset.filter(conversation__conversation_id=conversation_id)
+        
+        # Also handle query parameter for backward compatibility
         conversation_id = self.request.query_params.get('conversation_id', None)
         if conversation_id:
             queryset = queryset.filter(conversation__conversation_id=conversation_id)
@@ -189,6 +194,10 @@ class MessageViewSet(viewsets.ModelViewSet):
         # Automatically set the sender to the current user
         mutable_data = request.data.copy()
         mutable_data['sender_id'] = request.user.user_id
+        
+        # Handle nested routing - get conversation from URL path
+        if 'conversation_pk' in self.kwargs:
+            mutable_data['conversation'] = self.kwargs['conversation_pk']
         
         serializer = self.get_serializer(data=mutable_data)
         serializer.is_valid(raise_exception=True)
