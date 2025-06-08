@@ -130,7 +130,7 @@ class OffensiveLanguageMiddleware:
         ]
 
 
-class RolePermissionMiddleware:
+class RolepermissionMiddleware:  # Changed from RolePermissionMiddleware
     """
     Middleware that checks the user's role before allowing access to specific actions.
     Only allows access for admin or moderator users.
@@ -195,7 +195,6 @@ class RolePermissionMiddleware:
             return user.is_moderator
         
         return False
-
 
 # Additional middleware for actual offensive language detection (bonus)
 class OffensiveLanguageDetectionMiddleware:
