@@ -44,7 +44,12 @@ class IsMessageSender(permissions.BasePermission):
         Check if user is the sender of the message
         """
         if isinstance(obj, Message):
-            return obj.sender == request.user
+            # Only sender can update/delete their own messages
+            if request.method in ['PUT', 'PATCH', 'DELETE']:
+                return obj.sender == request.user
+            # Participants can read messages
+            elif request.method in permissions.SAFE_METHODS:
+                return obj.conversation.participants.filter(user_id=request.user.user_id).exists()
         return False
 
 
@@ -60,8 +65,11 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
         if request.method in permissions.SAFE_METHODS:
             return True
         
-        # Write permissions only to the owner
-        return getattr(obj, 'owner', None) == request.user
+        # Write permissions (PUT, PATCH, DELETE) only to the owner
+        if request.method in ['PUT', 'PATCH', 'DELETE']:
+            return getattr(obj, 'owner', None) == request.user
+        
+        return False
 
 
 class CanCreateConversation(permissions.BasePermission):
@@ -142,8 +150,12 @@ class ConversationPermission(permissions.BasePermission):
             if request.method in permissions.SAFE_METHODS:
                 # Read access for participants
                 return is_participant
-            else:
-                # Write access for participants (can add/remove other participants)
+            elif request.method in ['PUT', 'PATCH']:
+                # Update conversation details (only participants can modify)
+                return is_participant
+            elif request.method == 'DELETE':
+                # Only allow deletion if user is a participant
+                # You might want to add additional logic here (e.g., only creator can delete)
                 return is_participant
         
         return False
@@ -192,8 +204,11 @@ class MessagePermission(permissions.BasePermission):
             if request.method in permissions.SAFE_METHODS:
                 # Read access for conversation participants
                 return is_participant
-            else:
-                # Write access only for message sender
+            elif request.method in ['PUT', 'PATCH']:
+                # Only message sender can edit their own messages
+                return obj.sender == request.user and is_participant
+            elif request.method == 'DELETE':
+                # Only message sender can delete their own messages
                 return obj.sender == request.user and is_participant
         
         return False
@@ -214,7 +229,10 @@ class UserPermission(permissions.BasePermission):
         if request.method in permissions.SAFE_METHODS:
             return True
         
-        # Only allow users to update their own profile
+        # Allow creation (registration) - you might want to modify this based on your needs
+        if request.method == 'POST':
+            return True
+        
         return True
     
     def has_object_permission(self, request, view, obj):
@@ -224,9 +242,14 @@ class UserPermission(permissions.BasePermission):
         if request.method in permissions.SAFE_METHODS:
             # Read access for authenticated users
             return True
-        else:
-            # Write access only for the user themselves
+        elif request.method in ['PUT', 'PATCH']:
+            # Users can only update their own profile
             return obj == request.user
+        elif request.method == 'DELETE':
+            # Users can only delete their own account
+            return obj == request.user
+        
+        return False
 
 
 class AdminOrReadOnly(permissions.BasePermission):
@@ -237,4 +260,57 @@ class AdminOrReadOnly(permissions.BasePermission):
     def has_permission(self, request, view):
         if request.method in permissions.SAFE_METHODS:
             return True
+        # All write operations (POST, PUT, PATCH, DELETE) require admin
         return request.user and request.user.is_staff
+
+
+# Additional permission classes for specific use cases
+
+class MessageEditPermission(permissions.BasePermission):
+    """
+    Specific permission for message editing with time constraints
+    """
+    message = "You can only edit your own messages within the allowed time window."
+    
+    def has_object_permission(self, request, view, obj):
+        if isinstance(obj, Message):
+            # Check if user is the sender
+            if obj.sender != request.user:
+                return False
+            
+            # Optional: Add time constraint for editing (e.g., 15 minutes)
+            from django.utils import timezone
+            from datetime import timedelta
+            
+            time_limit = timezone.now() - timedelta(minutes=15)
+            if request.method in ['PUT', 'PATCH'] and obj.sent_at < time_limit:
+                self.message = "You can only edit messages within 15 minutes of sending."
+                return False
+            
+            return True
+        return False
+
+
+class ConversationCreatorPermission(permissions.BasePermission):
+    """
+    Permission that allows only conversation creators to perform certain actions
+    """
+    def has_object_permission(self, request, view, obj):
+        if isinstance(obj, Conversation):
+            if request.method == 'DELETE':
+                # Only the first participant (creator) can delete conversation
+                # You might want to add a 'creator' field to your Conversation model
+                first_participant = obj.participants.first()
+                return first_participant == request.user
+            
+            # Other operations allowed for all participants
+            return obj.participants.filter(user_id=request.user.user_id).exists()
+        return False
+
+
+class ReadOnlyPermission(permissions.BasePermission):
+    """
+    Permission that only allows read operations
+    """
+    def has_permission(self, request, view):
+        return request.method in permissions.SAFE_METHODSs_staff
