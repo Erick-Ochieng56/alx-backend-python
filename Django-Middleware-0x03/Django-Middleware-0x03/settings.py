@@ -59,11 +59,12 @@ MIDDLEWARE = [
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     
-    # Custom middlewares
+    # Custom middlewares - order matters!
     'chats.middleware.RequestLoggingMiddleware',
     'chats.middleware.RestrictAccessByTimeMiddleware', 
-    'chats.middleware.OffensiveLanguageMiddleware',
+    'chats.middleware.OffensiveLanguageMiddleware',  # Rate limiting
     'chats.middleware.RolePermissionMiddleware',
+    'chats.middleware.OffensiveLanguageDetectionMiddleware',  # Content filtering
     
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
