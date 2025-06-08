@@ -63,7 +63,7 @@ MIDDLEWARE = [
     'chats.middleware.RequestLoggingMiddleware',
     'chats.middleware.RestrictAccessByTimeMiddleware', 
     'chats.middleware.OffensiveLanguageMiddleware',  # Rate limiting
-    'chats.middleware.RolePermissionMiddleware',
+    'chats.middleware.RolepermissionMiddleware',
     'chats.middleware.OffensiveLanguageDetectionMiddleware',  # Content filtering
     
     'django.contrib.messages.middleware.MessageMiddleware',
