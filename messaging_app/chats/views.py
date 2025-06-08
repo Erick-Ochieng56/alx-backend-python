@@ -4,7 +4,10 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
-from django.db.models import Q
+from django.db.models import Q, Count, Prefetch
+from django.utils import timezone
+from datetime import timedelta
+
 from .models import User, Conversation, Message
 from .serializers import (
     UserSerializer, ConversationSerializer, ConversationListSerializer,
@@ -14,25 +17,43 @@ from .permissions import (
     ConversationPermission, MessagePermission, UserPermission,
     IsParticipantInConversation, IsMessageSender
 )
+from .filters import (
+    UserFilter, ConversationFilter, MessageFilter,
+    MessageTimeRangeFilter, ConversationParticipantFilter
+)
+from .pagination import (
+    UserPagination, ConversationPagination, MessagePagination,
+    MessageInfiniteScrollPagination, SearchResultsPagination,
+    LimitOffsetMessagePagination
+)
 
 
 class UserViewSet(viewsets.ModelViewSet):
     """
-    ViewSet for managing users with proper authentication
+    ViewSet for managing users with proper authentication, pagination and filtering
     """
     queryset = User.objects.all()
     serializer_class = UserSerializer
     permission_classes = [IsAuthenticated, UserPermission]
     lookup_field = 'user_id'
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
+    
+    # Pagination
+    pagination_class = UserPagination
+    
+    # Filtering and search backends
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_class = UserFilter
     search_fields = ['username', 'first_name', 'last_name', 'email']
-    filterset_fields = ['is_active', 'date_joined']
+    ordering_fields = ['username', 'first_name', 'last_name', 'date_joined', 'is_active']
+    ordering = ['username']
     
     def get_queryset(self):
         """
         Filter users and allow search functionality
         """
-        queryset = User.objects.filter(is_active=True)  # Only show active users
+        queryset = User.objects.filter(is_active=True)
+        
+        # Additional custom filtering
         search = self.request.query_params.get('search', None)
         if search is not None:
             queryset = queryset.filter(
@@ -41,7 +62,15 @@ class UserViewSet(viewsets.ModelViewSet):
                 Q(last_name__icontains=search) |
                 Q(email__icontains=search)
             )
-        return queryset
+        
+        # Filter by recent activity (users who sent messages in last 30 days)
+        if self.request.query_params.get('recently_active') == 'true':
+            recent_date = timezone.now() - timedelta(days=30)
+            queryset = queryset.filter(
+                sent_messages__sent_at__gte=recent_date
+            ).distinct()
+        
+        return queryset.distinct()
     
     def update(self, request, *args, **kwargs):
         """
@@ -96,27 +125,69 @@ class UserViewSet(viewsets.ModelViewSet):
             serializer.save()
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=False, methods=['get'], pagination_class=SearchResultsPagination)
+    def search(self, request):
+        """
+        Advanced user search with custom pagination
+        """
+        query = request.query_params.get('q', '')
+        if not query:
+            return Response(
+                {'error': 'Search query parameter "q" is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        queryset = self.get_queryset().filter(
+            Q(username__icontains=query) |
+            Q(first_name__icontains=query) |
+            Q(last_name__icontains=query) |
+            Q(email__icontains=query)
+        )
+        
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
 
 class ConversationViewSet(viewsets.ModelViewSet):
     """
-    ViewSet for managing conversations with authentication and permissions
+    ViewSet for managing conversations with authentication, permissions, pagination and filtering
     """
     permission_classes = [IsAuthenticated, ConversationPermission]
     lookup_field = 'conversation_id'
+    
+    # Pagination
+    pagination_class = ConversationPagination
+    
+    # Filtering and search backends
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ['title']
-    filterset_fields = ['is_group', 'created_at']
-    ordering_fields = ['created_at', 'updated_at']
+    filterset_class = ConversationFilter
+    search_fields = ['title', 'participants__username', 'participants__first_name', 'participants__last_name']
+    ordering_fields = ['created_at', 'updated_at', 'title']
     ordering = ['-updated_at']
     
     def get_queryset(self):
         """
-        Return conversations where the current user is a participant
+        Return conversations where the current user is a participant with optimized queries
         """
         return Conversation.objects.filter(
             participants=self.request.user
-        ).prefetch_related('participants', 'messages__sender')
+        ).select_related().prefetch_related(
+            'participants',
+            Prefetch(
+                'messages',
+                queryset=Message.objects.select_related('sender').order_by('-sent_at')[:5],
+                to_attr='recent_messages'
+            )
+        ).annotate(
+            participant_count=Count('participants'),
+            message_count=Count('messages')
+        )
     
     def get_serializer_class(self):
         """
@@ -269,20 +340,39 @@ class ConversationViewSet(viewsets.ModelViewSet):
         participants = conversation.participants.filter(is_active=True)
         serializer = UserSerializer(participants, many=True)
         return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'], filterset_class=ConversationParticipantFilter)
+    def with_participants(self, request):
+        """
+        Filter conversations with specific participants using specialized filter
+        """
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
 
 class MessageViewSet(viewsets.ModelViewSet):
     """
-    ViewSet for managing messages with authentication and permissions
+    ViewSet for managing messages with authentication, permissions, pagination and filtering
     """
     serializer_class = MessageSerializer
     permission_classes = [IsAuthenticated, MessagePermission]
     lookup_field = 'message_id'
+    
+    # Default pagination
+    pagination_class = MessagePagination
+    
+    # Filtering and search backends
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ['content']
-    filterset_fields = ['conversation', 'sender', 'timestamp', 'message_type']
-    ordering_fields = ['timestamp']
-    ordering = ['timestamp']
+    filterset_class = MessageFilter
+    search_fields = ['message_body', 'sender__username', 'sender__first_name', 'sender__last_name']
+    ordering_fields = ['sent_at', 'sender__username']
+    ordering = ['-sent_at']  # Most recent first by default
     
     def get_queryset(self):
         """
@@ -294,7 +384,9 @@ class MessageViewSet(viewsets.ModelViewSet):
         
         queryset = Message.objects.filter(
             conversation__in=user_conversations
-        ).select_related('sender', 'conversation')
+        ).select_related('sender', 'conversation').prefetch_related(
+            'conversation__participants'
+        )
         
         # Handle nested routing - filter by conversation if it's in the URL path
         if 'conversation_pk' in self.kwargs:
@@ -307,6 +399,29 @@ class MessageViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(conversation__conversation_id=conversation_id)
         
         return queryset
+    
+    def get_pagination_class(self):
+        """
+        Use different pagination classes based on query parameters
+        """
+        if self.request.query_params.get('infinite_scroll') == 'true':
+            return MessageInfiniteScrollPagination
+        elif self.request.query_params.get('use_offset') == 'true':
+            return LimitOffsetMessagePagination
+        return MessagePagination
+    
+    @property
+    def paginator(self):
+        """
+        Override paginator property to use dynamic pagination class
+        """
+        if not hasattr(self, '_paginator'):
+            if self.pagination_class is None:
+                self._paginator = None
+            else:
+                pagination_class = self.get_pagination_class()
+                self._paginator = pagination_class()
+        return self._paginator
     
     def create(self, request, *args, **kwargs):
         """
@@ -358,13 +473,12 @@ class MessageViewSet(viewsets.ModelViewSet):
             )
         
         # Check if message is within edit time limit (optional)
-        # from django.utils import timezone
-        # from datetime import timedelta
-        # if timezone.now() - message.timestamp > timedelta(minutes=15):
-        #     return Response(
-        #         {'error': 'Message can only be edited within 15 minutes of sending'},
-        #         status=status.HTTP_403_FORBIDDEN
-        #     )
+        if self.request.query_params.get('enforce_edit_limit') == 'true':
+            if timezone.now() - message.sent_at > timedelta(minutes=15):
+                return Response(
+                    {'error': 'Message can only be edited within 15 minutes of sending'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
         
         return super().update(request, *args, **kwargs)
     
@@ -435,3 +549,88 @@ class MessageViewSet(viewsets.ModelViewSet):
                 {'error': 'Conversation not found or you are not a participant'},
                 status=status.HTTP_404_NOT_FOUND
             )
+    
+    @action(detail=False, methods=['get'], filterset_class=MessageTimeRangeFilter, 
+            pagination_class=SearchResultsPagination)
+    def time_range_search(self, request):
+        """
+        Advanced time-based message filtering with specialized pagination
+        """
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'], pagination_class=SearchResultsPagination)
+    def full_text_search(self, request):
+        """
+        Advanced full-text search across message content
+        """
+        query = request.query_params.get('q', '')
+        if not query:
+            return Response(
+                {'error': 'Search query parameter "q" is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        queryset = self.get_queryset().filter(
+            Q(message_body__icontains=query) |
+            Q(sender__username__icontains=query) |
+            Q(sender__first_name__icontains=query) |
+            Q(sender__last_name__icontains=query)
+        )
+        
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'])
+    def recent_messages(self, request):
+        """
+        Get recent messages across all conversations for the user
+        """
+        # Get messages from last 24 hours by default
+        hours = int(request.query_params.get('hours', 24))
+        recent_date = timezone.now() - timedelta(hours=hours)
+        
+        queryset = self.get_queryset().filter(
+            sent_at__gte=recent_date
+        ).order_by('-sent_at')
+        
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'])
+    def statistics(self, request):
+        """
+        Get message statistics for the current user
+        """
+        queryset = self.get_queryset()
+        
+        stats = {
+            'total_messages': queryset.count(),
+            'messages_sent': queryset.filter(sender=request.user).count(),
+            'messages_received': queryset.exclude(sender=request.user).count(),
+            'conversations_count': queryset.values('conversation').distinct().count(),
+            'messages_today': queryset.filter(
+                sent_at__date=timezone.now().date()
+            ).count(),
+            'messages_this_week': queryset.filter(
+                sent_at__gte=timezone.now() - timedelta(days=7)
+            ).count(),
+        }
+        
+        return Response(stats)
