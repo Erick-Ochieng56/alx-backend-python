@@ -58,6 +58,13 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    
+    # Custom middlewares
+    'chats.middleware.RequestLoggingMiddleware',
+    'chats.middleware.RestrictAccessByTimeMiddleware', 
+    'chats.middleware.OffensiveLanguageMiddleware',
+    'chats.middleware.RolePermissionMiddleware',
+    
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -197,3 +204,30 @@ SIMPLE_JWT = {
 
 # Custom user model
 AUTH_USER_MODEL = 'chats.User'
+
+# Logging configuration for middleware
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'request_file': {
+            'level': 'INFO',
+            'class': 'logging.FileHandler',
+            'filename': BASE_DIR / 'requests.log',
+            'formatter': 'simple',
+        },
+    },
+    'formatters': {
+        'simple': {
+            'format': '{message}',
+            'style': '{',
+        },
+    },
+    'loggers': {
+        'request_logger': {
+            'handlers': ['request_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}
