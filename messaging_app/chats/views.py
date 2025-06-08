@@ -158,6 +158,8 @@ class ConversationViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing conversations with authentication, permissions, pagination and filtering
     """
+    queryset = Conversation.objects.all()
+    serializer_class = ConversationSerializer
     permission_classes = [IsAuthenticated, ConversationPermission]
     lookup_field = 'conversation_id'
     
@@ -188,7 +190,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
             participant_count=Count('participants'),
             message_count=Count('messages')
         )
-    
+           
     def get_serializer_class(self):
         """
         Use different serializers for list and detail views
@@ -360,6 +362,7 @@ class MessageViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing messages with authentication, permissions, pagination and filtering
     """
+    queryset = Message.objects.all()
     serializer_class = MessageSerializer
     permission_classes = [IsAuthenticated, MessagePermission]
     lookup_field = 'message_id'
@@ -397,7 +400,7 @@ class MessageViewSet(viewsets.ModelViewSet):
         conversation_id = self.request.query_params.get('conversation_id', None)
         if conversation_id:
             queryset = queryset.filter(conversation__conversation_id=conversation_id)
-        
+            
         return queryset
     
     def get_pagination_class(self):
