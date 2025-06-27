@@ -1,0 +1,71 @@
+# Main service that switches traffic between blue and green deployments
+apiVersion: v1
+kind: Service
+metadata:
+  name: django-messaging-service
+  labels:
+    app: django-messaging-app
+    service-type: main
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  selector:
+    app: django-messaging-app
+    version: blue  # Initially points to blue deployment
+
+---
+# LoadBalancer service for external access (alternative)
+apiVersion: v1
+kind: Service
+metadata:
+  name: django-messaging-external
+  labels:
+    app: django-messaging-app
+    service-type: external
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  selector:
+    app: django-messaging-app
+    version: blue  # Initially points to blue deployment
+
+---
+# NodePort service for direct access (useful in Minikube)
+apiVersion: v1
+kind: Service
+metadata:
+  name: django-messaging-nodeport
+  labels:
+    app: django-messaging-app
+    service-type: nodeport
+spec:
+  type: NodePort
+  ports:
+  - port: 80
+    targetPort: 8000
+    nodePort: 30080
+    protocol: TCP
+    name: http
+  selector:
+    app: django-messaging-app
+    version: blue  # Initially points to blue deployment
+
+---
+# ConfigMap for blue-green deployment configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blue-green-config
+data:
+  active-version: "blue"
+  previous-version: "none"
+  switch-timestamp: ""
+  rollback-enabled: "true"

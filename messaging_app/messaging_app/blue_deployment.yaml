@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: django-messaging-app-blue
+  labels:
+    app: django-messaging-app
+    version: blue
+    deployment: blue
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: django-messaging-app
+      version: blue
+  template:
+    metadata:
+      labels:
+        app: django-messaging-app
+        version: blue
+        deployment: blue
+    spec:
+      containers:
+      - name: django-app
+        image: django-messaging-app:1.0  # Blue version
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DEBUG
+          value: "True"
+        - name: SECRET_KEY
+          value: "django-insecure-k8s-blue-secret-key"
+        - name: ALLOWED_HOSTS
+          value: "*"
+        - name: VERSION
+          value: "blue-1.0"
+        - name: DEPLOYMENT_COLOR
+          value: "blue"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /admin/
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /admin/
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        volumeMounts:
+        - name: django-storage
+          mountPath: /app/db
+      volumes:
+      - name: django-storage
+        emptyDir: {}
+
+---
+# Blue Service (for internal routing)
+apiVersion: v1
+kind: Service
+metadata:
+  name: django-messaging-service-blue
+  labels:
+    app: django-messaging-app
+    version: blue
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  selector:
+    app: django-messaging-app
+    version: blue
