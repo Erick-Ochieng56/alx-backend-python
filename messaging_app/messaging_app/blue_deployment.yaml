@@ -1,24 +1,30 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: django-messaging-app
+  name: django-messaging-app-blue
   labels:
     app: django-messaging-app
-    version: v1
+    version: blue
 spec:
-  replicas: 1
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
   selector:
     matchLabels:
       app: django-messaging-app
+      version: blue
   template:
     metadata:
       labels:
         app: django-messaging-app
-        version: v1
+        version: blue
     spec:
       containers:
       - name: django-app
-        image: django-messaging-app:1.0
+        image: django-messaging-app:2.0
         imagePullPolicy: Never  # Use local image built with Docker
         ports:
         - containerPort: 8000
@@ -77,3 +83,4 @@ spec:
     name: http
   selector:
     app: django-messaging-app
+    version: blue
