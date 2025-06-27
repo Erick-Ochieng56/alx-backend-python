@@ -1,0 +1,317 @@
+#!/bin/bash
+
+# kubctl-0x03 - Task 5: Rolling Updates Implementation
+
+echo "=== Rolling Updates for Django Messaging App ==="
+
+# Colors for output
+BLUE='\033[0;34m'
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Configuration
+DEPLOYMENT_NAME="django-messaging-app-blue"
+SERVICE_NAME="django-messaging-service"
+NEW_IMAGE_VERSION="2.0"
+TEST_ENDPOINT="/admin/"
+CURL_TEST_INTERVAL=2
+CURL_TEST_DURATION=60
+
+# Function to log with timestamp
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+# Function to start continuous testing
+start_continuous_testing() {
+    local test_file="/tmp/rolling_update_test.log"
+    local error_file="/tmp/rolling_update_errors.log"
+    
+    log "Starting continuous availability testing..."
+    
+    # Start port forwarding
+    kubectl port-forward service/$SERVICE_NAME 8080:80 > /dev/null 2>&1 &
+    PORT_FORWARD_PID=$!
+    
+    # Wait for port forward to be ready
+    sleep 3
+    
+    # Start continuous testing in background
+    (
+        end_time=$(($(date +%s) + $CURL_TEST_DURATION))
+        request_count=0
+        success_count=0
+        
+        while [ $(date +%s) -lt $end_time ]; do
+            request_count=$((request_count + 1))
+            timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+            
+            # Perform HTTP request
+            response=$(curl -s -w "%{http_code}:%{time_total}" -o /dev/null "http://localhost:8080$TEST_ENDPOINT" 2>/dev/null)
+            
+            if [ $? -eq 0 ]; then
+                http_code=$(echo $response | cut -d: -f1)
+                response_time=$(echo $response | cut -d: -f2)
+                
+                if [ "$http_code" = "200" ] || [ "$http_code" = "302" ]; then
+                    success_count=$((success_count + 1))
+                    echo "$timestamp - Request $request_count: SUCCESS (HTTP: $http_code, Time: ${response_time}s)" >> $test_file
+                else
+                    echo "$timestamp - Request $request_count: FAILED (HTTP: $http_code, Time: ${response_time}s)" >> $test_file
+                    echo "$timestamp - Request $request_count: FAILED (HTTP: $http_code)" >> $error_file
+                fi
+            else
+                echo "$timestamp - Request $request_count: CONNECTION_FAILED" >> $test_file
+                echo "$timestamp - Request $request_count: CONNECTION_FAILED" >> $error_file
+            fi
+            
+            sleep $CURL_TEST_INTERVAL
+        done
+        
+        # Calculate success rate
+        if [ $request_count -gt 0 ]; then
+            success_rate=$((success_count * 100 / request_count))
+            echo "$timestamp - SUMMARY: $success_count/$request_count requests successful ($success_rate%)" >> $test_file
+        fi
+    ) &
+    
+    CURL_TEST_PID=$!
+    echo "Continuous testing started (PID: $CURL_TEST_PID)"
+    echo "Test results will be logged to: $test_file"
+    echo "Errors will be logged to: $error_file"
+    
+    return 0
+}
+
+# Function to stop continuous testing
+stop_continuous_testing() {
+    log "Stopping continuous testing..."
+    
+    # Kill curl testing process
+    if [ ! -z "$CURL_TEST_PID" ]; then
+        kill $CURL_TEST_PID 2>/dev/null
+    fi
+    
+    # Kill port forward process
+    if [ ! -z "$PORT_FORWARD_PID" ]; then
+        kill $PORT_FORWARD_PID 2>/dev/null
+    fi
+    
+    # Display test results
+    if [ -f "/tmp/rolling_update_test.log" ]; then
+        echo ""
+        echo -e "${YELLOW}=== Availability Test Results ===${NC}"
+        tail -20 /tmp/rolling_update_test.log
+        
+        # Check for errors
+        if [ -f "/tmp/rolling_update_errors.log" ]; then
+            error_count=$(wc -l < /tmp/rolling_update_errors.log)
+            if [ $error_count -gt 0 ]; then
+                echo -e "${RED}⚠ $error_count errors detected during rolling update${NC}"
+                echo "Recent errors:"
+                tail -10 /tmp/rolling_update_errors.log
+            else
+                echo -e "${GREEN}✓ No errors detected during rolling update${NC}"
+            fi
+        fi
+    fi
+}
+
+# Function to monitor rolling update progress
+monitor_rolling_update() {
+    local deployment=$1
+    log "Monitoring rolling update progress for $deployment"
+    
+    # Monitor in background
+    (
+        while true; do
+            # Get deployment status
+            status=$(kubectl get deployment $deployment -o jsonpath='{.status.conditions[?(@.type=="Progressing")].status}' 2>/dev/null)
+            ready_replicas=$(kubectl get deployment $deployment -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+            desired_replicas=$(kubectl get deployment $deployment -o jsonpath='{.spec.replicas}' 2>/dev/null)
+            
+            if [ "$status" = "True" ] && [ "$ready_replicas" = "$desired_replicas" ]; then
+                log "Rolling update completed successfully"
+                break
+            fi
+            
+            log "Rolling update in progress... Ready: $ready_replicas/$desired_replicas"
+            sleep 5
+        done
+    ) &
+    
+    MONITOR_PID=$!
+}
+
+# Cleanup function
+cleanup() {
+    log "Cleaning up background processes..."
+    stop_continuous_testing
+    if [ ! -z "$MONITOR_PID" ]; then
+        kill $MONITOR_PID 2>/dev/null
+    fi
+}
+
+# Set up cleanup trap
+trap cleanup EXIT
+
+# Step 1: Verify current deployment exists
+echo -e "${BLUE}=== Step 1: Verifying Current Deployment ===${NC}"
+
+if ! kubectl get deployment $DEPLOYMENT_NAME &> /dev/null; then
+    log "ERROR: Deployment $DEPLOYMENT_NAME not found"
+    log "Please ensure the blue deployment is running first"
+    exit 1
+fi
+
+# Get current image
+current_image=$(kubectl get deployment $DEPLOYMENT_NAME -o jsonpath='{.spec.template.spec.containers[0].image}')
+log "Current image: $current_image"
+
+# Display current deployment status
+kubectl get deployment $DEPLOYMENT_NAME -o wide
+
+# Step 2: Update deployment configuration for version 2.0
+echo -e "${YELLOW}=== Step 2: Updating Deployment Configuration ===${NC}"
+
+# Create a backup of current deployment
+kubectl get deployment $DEPLOYMENT_NAME -o yaml > /tmp/blue_deployment_backup.yaml
+log "Backup created at /tmp/blue_deployment_backup.yaml"
+
+# Update the image version in blue_deployment.yaml (simulate version 2.0)
+log "Updating image version to $NEW_IMAGE_VERSION in blue_deployment.yaml"
+
+# Since we're updating the file, we'll use sed to change the image version
+if [ -f "blue_deployment.yaml" ]; then
+    # Create a temporary updated version
+    sed 's/django-messaging-app:1\.0/django-messaging-app:2.0/g' blue_deployment.yaml > /tmp/blue_deployment_v2.yaml
+    log "Updated deployment configuration created"
+else
+    log "ERROR: blue_deployment.yaml not found"
+    exit 1
+fi
+
+# Step 3: Start continuous availability testing
+echo -e "${GREEN}=== Step 3: Starting Continuous Availability Testing ===${NC}"
+start_continuous_testing
+
+# Step 4: Apply the updated deployment and trigger rolling update
+echo -e "${BLUE}=== Step 4: Applying Updated Deployment (Rolling Update) ===${NC}"
+
+log "Applying updated deployment configuration..."
+kubectl apply -f /tmp/blue_deployment_v2.yaml
+
+if [ $? -eq 0 ]; then
+    log "✓ Updated deployment applied successfully"
+else
+    log "✗ Failed to apply updated deployment"
+    exit 1
+fi
+
+# Step 5: Monitor the rolling update progress
+echo -e "${YELLOW}=== Step 5: Monitoring Rolling Update Progress ===${NC}"
+
+# Start monitoring
+monitor_rolling_update $DEPLOYMENT_NAME
+
+# Use kubectl rollout status to track progress
+log "Tracking rollout status..."
+kubectl rollout status deployment/$DEPLOYMENT_NAME --timeout=300s
+
+if [ $? -eq 0 ]; then
+    log "✓ Rolling update completed successfully"
+else
+    log "✗ Rolling update failed or timed out"
+    
+    # Show rollout history
+    echo "Rollout history:"
+    kubectl rollout history deployment/$DEPLOYMENT_NAME
+    
+    # Option to rollback
+    read -p "Do you want to rollback to previous version? (y/n): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        log "Rolling back to previous version..."
+        kubectl rollout undo deployment/$DEPLOYMENT_NAME
+        kubectl rollout status deployment/$DEPLOYMENT_NAME --timeout=300s
+    fi
+    
+    exit 1
+fi
+
+# Step 6: Verify the rolling update is complete
+echo -e "${GREEN}=== Step 6: Verifying Rolling Update Completion ===${NC}"
+
+# Wait a moment for all pods to be ready
+sleep 10
+
+log "Checking current pods..."
+kubectl get pods -l app=django-messaging-app,version=blue -o wide
+
+# Verify all pods are running the new image
+log "Verifying pod images..."
+pods=$(kubectl get pods -l app=django-messaging-app,version=blue -o jsonpath='{.items[*].metadata.name}')
+
+for pod in $pods; do
+    pod_image=$(kubectl get pod $pod -o jsonpath='{.spec.containers[0].image}')
+    log "Pod $pod is running image: $pod_image"
+    
+    if [[ $pod_image == *"$NEW_IMAGE_VERSION"* ]]; then
+        log "✓ Pod $pod has been updated to version $NEW_IMAGE_VERSION"
+    else
+        log "✗ Pod $pod is still running old version"
+    fi
+done
+
+# Check deployment status
+log "Final deployment status:"
+kubectl get deployment $DEPLOYMENT_NAME -o wide
+
+# Check rollout history
+log "Rollout history:"
+kubectl rollout history deployment/$DEPLOYMENT_NAME
+
+# Step 7: Final health check
+echo -e "${BLUE}=== Step 7: Final Application Health Check ===${NC}"
+
+# Port forward for health check
+kubectl port-forward service/$SERVICE_NAME 8081:80 > /dev/null 2>&1 &
+HEALTH_CHECK_PID=$!
+sleep 3
+
+log "Performing final health check..."
+health_response=$(curl -s -w "%{http_code}" -o /dev/null "http://localhost:8081$TEST_ENDPOINT" 2>/dev/null)
+
+kill $HEALTH_CHECK_PID 2>/dev/null
+
+if [ "$health_response" = "200" ] || [ "$health_response" = "302" ]; then
+    log "✓ Application is healthy after rolling update (HTTP: $health_response)"
+else
+    log "✗ Application health check failed (HTTP: $health_response)"
+fi
+
+# Step 8: Display summary
+echo -e "${GREEN}=== Step 8: Rolling Update Summary ===${NC}"
+
+log "Rolling update completed for $DEPLOYMENT_NAME"
+log "Image updated from django-messaging-app:1.0 to django-messaging-app:$NEW_IMAGE_VERSION"
+log "Deployment strategy: RollingUpdate"
+
+# Get current deployment details
+echo ""
+echo "Current deployment details:"
+kubectl describe deployment $DEPLOYMENT_NAME | grep -A 5 -B 5 "RollingUpdateStrategy\|Image\|Replicas"
+
+echo ""
+echo "Pod distribution:"
+kubectl get pods -l app=django-messaging-app,version=blue -o custom-columns="NAME:.metadata.name,STATUS:.status.phase,IMAGE:.spec.containers[0].image,NODE:.spec.nodeName"
+
+echo ""
+log "Rolling update process completed successfully!"
+log "Application should have experienced minimal to no downtime"
+
+# Stop continuous testing (will be called by cleanup trap)
+# but we'll call it explicitly to show results before script ends
+stop_continuous_testing
