@@ -1,0 +1,80 @@
+#!/bin/bash
+
+# kurbeScript - Task 0: Install Kubernetes and Set Up a Local Cluster
+
+echo "=== Starting Kubernetes Local Cluster Setup ==="
+
+# Check if minikube is installed
+if ! command -v minikube &> /dev/null; then
+    echo "Error: minikube is not installed. Please install minikube first."
+    echo "Installation guide: https://minikube.sigs.k8s.io/docs/start/"
+    exit 1
+fi
+
+# Check if kubectl is installed
+if ! command -v kubectl &> /dev/null; then
+    echo "Error: kubectl is not installed. Please install kubectl first."
+    exit 1
+fi
+
+echo "✓ minikube and kubectl are installed"
+
+# Start minikube cluster
+echo "Starting minikube cluster..."
+minikube start --driver=docker
+
+# Check if cluster started successfully
+if [ $? -eq 0 ]; then
+    echo "✓ Minikube cluster started successfully"
+else
+    echo "✗ Failed to start minikube cluster"
+    exit 1
+fi
+
+# Wait a moment for cluster to be ready
+sleep 5
+
+# Verify cluster is running
+echo ""
+echo "=== Verifying Cluster Status ==="
+kubectl cluster-info
+
+# Check if cluster-info command was successful
+if [ $? -eq 0 ]; then
+    echo "✓ Cluster is running and accessible"
+else
+    echo "✗ Failed to access cluster"
+    exit 1
+fi
+
+# Get cluster nodes
+echo ""
+echo "=== Cluster Nodes ==="
+kubectl get nodes
+
+# Retrieve available pods in all namespaces
+echo ""
+echo "=== Available Pods ==="
+kubectl get pods --all-namespaces
+
+# Get default namespace pods specifically
+echo ""
+echo "=== Pods in Default Namespace ==="
+kubectl get pods
+
+# Display cluster context
+echo ""
+echo "=== Current Context ==="
+kubectl config current-context
+
+# Enable necessary addons for later tasks
+echo ""
+echo "=== Enabling Required Addons ==="
+minikube addons enable ingress
+minikube addons enable metrics-server
+
+echo ""
+echo "=== Cluster Setup Complete ==="
+echo "Your Kubernetes cluster is ready for deployment!"
+echo "Cluster IP: $(minikube ip)"
+echo "Dashboard URL: $(minikube dashboard --url)"
