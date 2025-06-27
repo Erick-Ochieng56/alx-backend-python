@@ -1,5 +1,5 @@
 # Use Python 3.10 as base image
-FROM python:3.10-slim
+FROM python:3.11-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE 1
@@ -18,10 +18,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements file
-COPY requirements.txt /app/
+COPY requirements-docker.txt /app/
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements-docker.txt
 
 # Copy project
 COPY . /app/

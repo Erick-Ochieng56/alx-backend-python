@@ -17,7 +17,6 @@ certifi==2024.7.4
 cffi==1.17.1
 charset-normalizer==3.3.2
 click==8.1.7
-colorama==0.4.6
 comm==0.2.2
 cryptography==43.0.3
 debugpy==1.8.13
@@ -89,11 +88,9 @@ Pygments==2.19.1
 PyJWT==2.9.0
 PyMySQL==1.1.1
 python-dateutil==2.9.0.post0
-python-dotenv==1.1.0
+python-dotenv==1.1.1
 python-json-logger==3.3.0
 pytz==2024.2
-pywin32==310
-pywinpty==2.0.15
 PyYAML==6.0.2
 pyzmq==26.4.0
 referencing==0.36.2

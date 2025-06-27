@@ -1,0 +1,130 @@
+#!/bin/bash
+
+# kubctl-0x01 - Task 2: Scale the Django App Using Kubernetes
+
+echo "=== Scaling Django App in Kubernetes ==="
+
+# Check if deployment exists
+if ! kubectl get deployment django-messaging-app &> /dev/null; then
+    echo "Error: django-messaging-app deployment not found."
+    echo "Please deploy the application first using: kubectl apply -f deployment.yaml"
+    exit 1
+fi
+
+# Scale deployment to 3 replicas
+echo "Scaling django-messaging-app deployment to 3 replicas..."
+kubectl scale deployment django-messaging-app --replicas=3
+
+# Wait for scaling to complete
+echo "Waiting for pods to be ready..."
+kubectl rollout status deployment/django-messaging-app --timeout=300s
+
+if [ $? -eq 0 ]; then
+    echo "✓ Scaling completed successfully"
+else
+    echo "✗ Scaling failed or timed out"
+    exit 1
+fi
+
+# Verify multiple pods are running
+echo ""
+echo "=== Current Pod Status ==="
+kubectl get pods -l app=django-messaging-app
+
+# Get detailed pod information
+echo ""
+echo "=== Detailed Pod Information ==="
+kubectl get pods -l app=django-messaging-app -o wide
+
+# Check deployment status
+echo ""
+echo "=== Deployment Status ==="
+kubectl get deployment django-messaging-app
+
+# Get service endpoint for load testing
+SERVICE_IP=$(kubectl get service django-messaging-service -o jsonpath='{.spec.clusterIP}')
+SERVICE_PORT=$(kubectl get service django-messaging-service -o jsonpath='{.spec.ports[0].port}')
+
+echo ""
+echo "Service available at: http://$SERVICE_IP:$SERVICE_PORT"
+
+# Check if wrk is installed for load testing
+if command -v wrk &> /dev/null; then
+    echo ""
+    echo "=== Performing Load Testing with wrk ==="
+    
+    # Port forward to access the service locally
+    echo "Setting up port forwarding..."
+    kubectl port-forward service/django-messaging-service 8080:80 &
+    PORT_FORWARD_PID=$!
+    
+    # Wait for port forward to be ready
+    sleep 5
+    
+    echo "Running load test for 30 seconds with 10 connections..."
+    wrk -t10 -c10 -d30s http://localhost:8080/admin/ || echo "Load test completed"
+    
+    # Kill port forward process
+    kill $PORT_FORWARD_PID 2>/dev/null
+    
+else
+    echo ""
+    echo "⚠ wrk is not installed. To install wrk on Ubuntu/Debian:"
+    echo "sudo apt-get install wrk"
+    echo ""
+    echo "Alternative load testing with curl:"
+    
+    # Port forward for curl testing
+    kubectl port-forward service/django-messaging-service 8080:80 &
+    PORT_FORWARD_PID=$!
+    sleep 3
+    
+    echo "Testing endpoint availability..."
+    for i in {1..10}; do
+        echo "Request $i:"
+        curl -s -o /dev/null -w "Status: %{http_code}, Time: %{time_total}s\n" http://localhost:8080/admin/ || echo "Request failed"
+        sleep 1
+    done
+    
+    # Kill port forward process
+    kill $PORT_FORWARD_PID 2>/dev/null
+fi
+
+# Monitor Resource Usage
+echo ""
+echo "=== Monitoring Resource Usage ==="
+
+# Check if metrics-server is available
+if kubectl top nodes &> /dev/null; then
+    echo "Node Resource Usage:"
+    kubectl top nodes
+    
+    echo ""
+    echo "Pod Resource Usage:"
+    kubectl top pods -l app=django-messaging-app
+else
+    echo "⚠ Metrics server not available. Enable with:"
+    echo "minikube addons enable metrics-server"
+    echo ""
+    echo "Resource requests and limits from deployment:"
+    kubectl get deployment django-messaging-app -o jsonpath='{.spec.template.spec.containers[0].resources}' | jq '.'
+fi
+
+# Display events related to the deployment
+echo ""
+echo "=== Recent Events ==="
+kubectl get events --sort-by=.metadata.creationTimestamp | grep django-messaging-app | tail -10
+
+# Show pod logs from all replicas
+echo ""
+echo "=== Pod Logs (last 10 lines from each pod) ==="
+for pod in $(kubectl get pods -l app=django-messaging-app -o jsonpath='{.items[*].metadata.name}'); do
+    echo "--- Logs from $pod ---"
+    kubectl logs $pod --tail=10
+    echo ""
+done
+
+echo ""
+echo "=== Scaling Task Completed ==="
+echo "Django app is now running with 3 replicas"
+echo "Use 'kubectl get pods -l app=django-messaging-app' to monitor pod status"
