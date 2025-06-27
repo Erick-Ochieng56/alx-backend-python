@@ -1,40 +1,36 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: django-messaging-app-blue
+  name: django-messaging-app
   labels:
     app: django-messaging-app
-    version: blue
-    deployment: blue
+    version: v1
 spec:
-  replicas: 3
+  replicas: 1
   selector:
     matchLabels:
       app: django-messaging-app
-      version: blue
   template:
     metadata:
       labels:
         app: django-messaging-app
-        version: blue
-        deployment: blue
+        version: v1
     spec:
       containers:
       - name: django-app
-        image: django-messaging-app:1.0  # Blue version
+        image: django-messaging-app:1.0
+        imagePullPolicy: Never  # Use local image built with Docker
         ports:
         - containerPort: 8000
         env:
         - name: DEBUG
           value: "True"
         - name: SECRET_KEY
-          value: "django-insecure-k8s-blue-secret-key"
+          value: "django-insecure-vds04_t^w8_284d(utjqh3m!q!%x1=&6c9*lb71t_b*npg3zbb"
         - name: ALLOWED_HOSTS
           value: "*"
-        - name: VERSION
-          value: "blue-1.0"
-        - name: DEPLOYMENT_COLOR
-          value: "blue"
+        - name: DATABASE_URL
+          value: "sqlite:///app/db/db.sqlite3"
         resources:
           requests:
             memory: "256Mi"
@@ -44,7 +40,7 @@ spec:
             cpu: "500m"
         livenessProbe:
           httpGet:
-            path: /admin/
+            path: /
             port: 8000
           initialDelaySeconds: 30
           periodSeconds: 10
@@ -52,9 +48,9 @@ spec:
           failureThreshold: 3
         readinessProbe:
           httpGet:
-            path: /admin/
+            path: /
             port: 8000
-          initialDelaySeconds: 10
+          initialDelaySeconds: 15
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 3
@@ -66,14 +62,12 @@ spec:
         emptyDir: {}
 
 ---
-# Blue Service (for internal routing)
 apiVersion: v1
 kind: Service
 metadata:
-  name: django-messaging-service-blue
+  name: django-messaging-service
   labels:
     app: django-messaging-app
-    version: blue
 spec:
   type: ClusterIP
   ports:
@@ -83,4 +77,3 @@ spec:
     name: http
   selector:
     app: django-messaging-app
-    version: blue
