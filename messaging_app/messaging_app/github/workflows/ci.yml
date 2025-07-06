@@ -1,0 +1,99 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: test_messaging_db
+          MYSQL_USER: test_user
+          MYSQL_PASSWORD: test_password
+          MYSQL_ROOT_PASSWORD: root_password
+        ports:
+          - 3306:3306
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: |
+        cd messaging_app
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-django pytest-cov flake8 coverage
+
+    - name: Wait for MySQL
+      run: |
+        while ! mysqladmin ping -h"127.0.0.1" -P3306 -uroot -proot_password --silent; do
+          echo "Waiting for MySQL to be ready..."
+          sleep 2
+        done
+
+    - name: Set up environment variables
+      run: |
+        cd messaging_app
+        echo "DEBUG=False" >> .env
+        echo "SECRET_KEY=test-secret-key-for-ci" >> .env
+        echo "MYSQL_DB=test_messaging_db" >> .env
+        echo "MYSQL_USER=test_user" >> .env
+        echo "MYSQL_PASSWORD=test_password" >> .env
+        echo "MYSQL_HOST=127.0.0.1" >> .env
+        echo "MYSQL_PORT=3306" >> .env
+
+    - name: Run database migrations
+      run: |
+        cd messaging_app
+        python manage.py makemigrations
+        python manage.py migrate
+
+    - name: Run flake8 linting
+      run: |
+        cd messaging_app
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+    - name: Run tests with coverage
+      run: |
+        cd messaging_app
+        coverage run --source='.' manage.py test
+        coverage xml
+        coverage html
+
+    - name: Upload coverage reports
+      uses: actions/upload-artifact@v3
+      with:
+        name: coverage-reports
+        path: |
+          messaging_app/coverage.xml
+          messaging_app/htmlcov/
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results
+        path: messaging_app/test-results.xml

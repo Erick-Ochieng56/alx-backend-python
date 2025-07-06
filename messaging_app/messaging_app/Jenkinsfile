@@ -1,0 +1,105 @@
+pipeline {
+    agent any
+    
+    environment {
+        DOCKER_IMAGE = "keganashura99/messaging-app"
+        DOCKER_TAG = "${BUILD_NUMBER}"
+        DOCKER_CREDENTIALS = credentials('docker-hub-credentials')
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                echo 'Checking out source code...'
+                git branch: 'main', 
+                    credentialsId: 'github-credentials',
+                    url: 'https://github.com/Erick-Ochieng56/alx-backend-python'
+            }
+        }
+        
+        stage('Setup Python Environment') {
+            steps {
+                echo 'Setting up Python environment...'
+                sh '''
+                    cd messaging_app
+                    python3 -m venv venv
+                    . venv/bin/activate
+                    pip install --upgrade pip
+                    pip install -r requirements.txt
+                    pip install pytest pytest-django pytest-cov
+                '''
+            }
+        }
+        
+        stage('Run Tests') {
+            steps {
+                echo 'Running tests with pytest...'
+                sh '''
+                    cd messaging_app
+                    . venv/bin/activate
+                    export DJANGO_SETTINGS_MODULE=messaging_app.settings
+                    python manage.py migrate --settings=messaging_app.settings
+                    pytest --junitxml=test-results.xml --cov=. --cov-report=xml --cov-report=html
+                '''
+            }
+            post {
+                always {
+                    publishTestResults testResultsPattern: 'messaging_app/test-results.xml'
+                    publishHTML([
+                        allowMissing: false,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: 'messaging_app/htmlcov',
+                        reportFiles: 'index.html',
+                        reportName: 'Coverage Report'
+                    ])
+                }
+            }
+        }
+        
+        stage('Build Docker Image') {
+            steps {
+                echo 'Building Docker image...'
+                sh '''
+                    cd messaging_app
+                    docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} .
+                    docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_IMAGE}:latest
+                '''
+            }
+        }
+        
+        stage('Push Docker Image') {
+            steps {
+                echo 'Pushing Docker image to Docker Hub...'
+                sh '''
+                    echo $DOCKER_CREDENTIALS_PSW | docker login -u $DOCKER_CREDENTIALS_USR --password-stdin
+                    docker push ${DOCKER_IMAGE}:${DOCKER_TAG}
+                    docker push ${DOCKER_IMAGE}:latest
+                '''
+            }
+        }
+        
+        stage('Cleanup') {
+            steps {
+                echo 'Cleaning up local Docker images...'
+                sh '''
+                    docker rmi ${DOCKER_IMAGE}:${DOCKER_TAG} || true
+                    docker rmi ${DOCKER_IMAGE}:latest || true
+                '''
+            }
+        }
+    }
+    
+    post {
+        always {
+            echo 'Pipeline completed!'
+            cleanWs()
+        }
+        success {
+            echo 'Pipeline succeeded!'
+        }
+        failure {
+            echo 'Pipeline failed!'
+        }
+    }
+}
